@@ -6,13 +6,9 @@
 
 Integration with Quickbooks Online via the Intuit Data Services v3 REST API.
 
-**NOTE**: If you are looking for the v2 API then you need to use my other library - Quickeebooks:
-
-https://github.com/ruckus/quickeebooks
-
 This library communicates with the Quickbooks Data Services `v3` API, documented at:
 
-[Data Services v3](https://developer.intuit.com/docs/0025_quickbooksapi/0050_data_services)
+[Data Services v3](https://developer.intuit.com/docs/api/accounting)
 
 ## Changes in 0.1.x from 0.0.x
 
@@ -42,12 +38,13 @@ Ruby 1.8.7 and 1.9.2 are not supported.
 Gems:
 
 * `oauth`
+* `oauth2`
 * `roxml` : Workhorse for (de)serializing objects between Ruby & XML
 * `nokogiri` : XML parsing
 * `active_model` : For validations
 
 ## Sandbox Mode
-An API app provides two sets of OAuth key for production and development. Since October 22, 2014, only [Sandbox Companies](https://developer.intuit.com/docs/0025_quickbooksapi/0050_data_services)
+An API app provides two sets of OAuth key for production and development. Since October 22, 2014, only [Sandbox Companies](https://developer.intuit.com/docs/api/accounting)
 are allowed to connected to the QBO via the development key. The end-point for sandbox mode is https://sandbox-quickbooks.api.intuit.com.
 
 By default, the gem runs in production mode. If you prefer to develop / test the integration with the development key,
@@ -57,7 +54,98 @@ you need to config the gem to run in sandbox mode:
 Quickbooks.sandbox_mode = true
 ```
 
-## Getting Started & Initiating Authentication Flow with Intuit
+## Authorization through OAuth 2.0
+This section is only for developer accounts that uses OAuth 2.0 for the apps. For apps that are authorized by OAuth 1, please refer to the next section.
+
+### Getting Started & Initiating Authentication Flow with Intuit
+
+What follows is an example using Rails but the principles can be adapted to any other framework / pure Ruby.
+
+Create a Rails initializer with:
+
+```ruby
+OAUTH_CONSUMER_KEY = ENV["OAUTH_CONSUMER_KEY"]
+OAUTH_CONSUMER_SECRET = ENV["OAUTH_CONSUMER_SECRET"]
+
+oauth_params = {
+  :site => "https://appcenter.intuit.com/connect/oauth2",
+  :authorize_url => "https://appcenter.intuit.com/connect/oauth2",
+  :token_url => "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+}
+
+::QB_OAUTH2_CONSUMER = OAuth2::Client.new(OAUTH_CONSUMER_KEY, OAUTH_CONSUMER_SECRET, oauth_params)
+
+```
+
+Your Controller action (the `grantUrl` above) should look like this:
+
+```ruby
+def authenticate
+  redirect_uri = quickbooks_oauth_callback_url
+  grant_url = ::QB_OAUTH2_CONSUMER.auth_code.authorize_url(:redirect_uri => redirect_uri, :response_type => "code", :state => SecureRandom.hex(12), :scope => "com.intuit.quickbooks.accounting")
+  redirect_to grant_url
+end
+```
+
+Where `quickbooks_oauth_callback_url` is the absolute URL of your application that Intuit should send the user when authentication succeeds.
+
+That action should look like:
+
+```ruby
+def oauth_callback
+  if params[:state]
+    redirect_uri = oauth_callback_quickbooks_url
+    if resp = ::QB_OAUTH2_CONSUMER.auth_code.get_token(params[:code], :redirect_uri => redirect_uri)
+      # save your tokens here. For example:
+      # quickbooks_credentials.update_attributes(access_token: resp.token, refresh_token: resp.refresh_token, realm_id: params[:realmId])
+    end
+  end
+end
+```
+
+Most likely you will want to persist the OAuth access credentials so that users don't need to re-authorize your application in every session.
+
+An example database table would have fields likes:
+
+```sql
+access_token varchar(255),
+refresh_token varchar(255),
+realm_id varchar(255)
+```
+
+### Creating an OAuth Access Token
+
+Once you have your user's OAuth token, you can re-use the `OAuth Consumer` and create a `OAuth Client` using the `QB_OAUTH2_CONSUMER` you created earlier in your Rails initializer:
+
+```ruby
+qb_access_token = quickbooks_credentials.access_token
+qb_refresh_token = quickbooks_credentials.refresh_token
+
+access_token = OAuth2::AccessToken.new(::QB_OAUTH2_CONSUMER, qb_access_token, { :refresh_token => qb_refresh_token })
+```
+
+### Access Token Validity and Token Refresh
+
+Each access token is only valid for one hour. The access token and refresh token can be refreshed directly by using OAuth Client:
+
+```ruby
+new_access_token = access_token.refresh!
+```
+
+The token must be assigned to a variable to prevent the loss of your new access token, which will void your credentials and a new set of credentials have to be acquired by authorizing the application again.
+Unauthorized (expired) access to the API will raise a `OAuth2::Error` error.
+
+For more information on access token expiration and refresh token expiration, please refer to the [official documentation](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0#understand-token-expiration).
+
+### Credentials Encryption
+For simplicity, this example does not encrypt the access credentials. If you are developing an app and
+plan on publishing it to Intuit's marketplace you will need to encrypt the credentials to comply with
+their [security requirements](https://developer.intuit.com/app/developer/qbo/docs/list-on-the-app-store/security-requirements).
+We'd suggest looking at the [attr_encrypted gem](https://github.com/attr-encrypted/attr_encrypted) to
+handle the actual encryption and decryption.
+
+## Authorization through OAuth 1
+### Getting Started & Initiating Authentication Flow with Intuit
 
 What follows is an example using Rails but the principles can be adapted to any other framework / pure Ruby.
 
@@ -123,9 +211,9 @@ session[:qb_request_token] = Marshal.dump(token)
 Marshal.load(session[:qb_request_token]).get_access_token(:oauth_verifier => params[:oauth_verifier])
 ```
 
-:star: Also, check out regular Quickbooks-Ruby contributor, <a href="https://github.com/minimul" target="_blank">minimul</a>'s, article [Integrating Rails and QuickBooks Online via the version 3 API](http://minimul.com/integrating-rails-and-quickbooks-online-via-the-version-3-api-part-1.html) for a step-by-step guide along with screencasts.
+:star: Also, check out regular Quickbooks-Ruby contributor, [minimul](https://github.com/minimul)'s, article [Integrating Rails and QuickBooks Online via the version 3 API](http://minimul.com/integrating-rails-and-quickbooks-online-via-the-version-3-api-part-1.html) for a step-by-step guide along with screencasts.
 
-## Creating an OAuth Access Token
+### Creating an OAuth Access Token
 
 Once you have your users OAuth Token & Secret you can initialize your `OAuth Consumer` and create a `OAuth Client` using the `QB_OAUTH_CONSUMER` you created earlier in your Rails initializer:
 
@@ -133,27 +221,24 @@ Once you have your users OAuth Token & Secret you can initialize your `OAuth Con
 access_token = OAuth::AccessToken.new(QB_OAUTH_CONSUMER, string_access_token_from_qb, string_access_secret_from_qb)
 ```
 
-## Persisting the Credentials
+### Persisting the Credentials
 
 Most likely you will want to persist the OAuth access credentials so you don't have to connect to QBO
 each and every time.
 
-QBO allows the access credentials to live for 6 months, and after 5 months they can be renewed. You will
-get an error if you try and renew prior to 5 months. Thus, you will need to keep track of the dates and
-manage the renewal process yourself.
+The access credentials are valid for 180 days. 30 days before they expire, they can be renewed. You'll need
+to keep track of the expiration date and manage the renewal process yourself.
 
 An example database table would have fields likes:
 
-
 ```sql
 access_token varchar(255),
-access_secret varchar(255)
+access_secret varchar(255),
 company_id varchar(255),
-token_expires_at datetime # Set to 6.months.from_now upon insertion
-reconnect_token_at datetime # Set to 5.months.from_now upon insertion
+token_expires_at datetime # Set to 180.days.from_now upon insertion
 ```
 
-Then you will want to have a scheduled task / cron which runs nightly and runs thru your tokens and checks for records where `reconnect_token_at <= now()` and it then performs the following logic:
+Then you will want to have a scheduled task which runs nightly looking for records `where('token_expires_at < ?', 30.days.from_now)` and then performs the renewal:
 
 ```ruby
 expiring_tokens.each do |record|
@@ -161,16 +246,53 @@ expiring_tokens.each do |record|
   service = Quickbooks::Service::AccessToken.new
   service.access_token = access_token
   service.company_id = record.company_id
-  result = service.renew
+  new_token = service.renew
 
-  # result is an AccessTokenResponse, which has fields +token+ and +secret+
-  # update your local record with these new params
-  record.access_token = result.token
-  record.access_secret = result.secret
-  record.token_expires_at = 6.months.from_now.utc
-  record.reconnect_token_at = 5.months.from_now.utc
-  record.save!
+  case new_token.error_code
+  when "0" # Success
+    # Update the stored values
+    record.update_attributes!(
+      access_token: new_token.token,
+      access_secret: new_token.secret,
+      token_expires_at: 180.days.from_now.utc,
+    )
+    puts "Renewal succeeded"
+  when "270" # The OAuth access token has expired.
+    # Discard any saved credentials, need to restart the OAuth process
+    record.update_attributes!(
+      access_token: nil,
+      access_secret: nil,
+      token_expires_at: nil,
+    )
+    puts "Renewal failed"
+  when "212" # Token Refresh Window Out of Bounds
+    # Tried to renew it more than 30 days before expiration
+    puts "Renewal ignored, tried too soon"
+  else
+    puts "Renewal failed, code: #{new_token.error_code} message: #{new_token.error_message}"
+  end
 end
+```
+
+For simplicity, this example does not encrypt the access credentials. If you are developing an app and
+plan on publishing it to Intuit's marketplace you will need to encrypt the credentials to comply with
+their [security requirements](https://developer.intuit.com/docs/0100_quickbooks_online/0100_essentials/0085_develop_quickbooks_apps/0006_publish_and_market_your_app_with_quickbooks/0005_security_requirements).
+We'd suggest looking at the [attr_encrypted gem](https://github.com/attr-encrypted/attr_encrypted) to
+handle the actual encryption and decryption.
+
+### Revoke token/disconnect
+
+It is possible to revoke access given to it by a specific user using the `Quickbooks::Service::AccessToken#disconnect` method.
+For more information on how to revoke an access token, please refer to the [official documentation](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0#revoke-token-disconnect).
+
+```ruby
+qb_access_token = quickbooks_credentials.access_token
+qb_refresh_token = quickbooks_credentials.refresh_token
+
+access_token = OAuth2::AccessToken.new(::QB_OAUTH2_CONSUMER, qb_access_token, { :refresh_token => qb_refresh_token })
+qb_access_token = Quickbooks::Service::AccessToken.new(access_token: access_token)
+disconnect_response = qb_access_token.disconnect
+puts disconnect_response.error?
 ```
 
 ## Getting Started - Retrieving a list of Customers
@@ -356,6 +478,41 @@ puts created_invoice.id
 
 **Notes**: `line_item.amount` must equal the `unit_price * quantity` in the sales detail packet - otherwise Intuit will raise an exception.
 
+## Generating an Invoice containing a Bundle
+
+Example (code fragments) of adding a bundle line item, to an invoice:
+
+```ruby
+items = service.find_by(:sku, 'AHH_SWEETS')
+bundle = items.entries.first
+# be sure to check if you found the bundle you want
+# ...
+
+line_item = Quickbooks::Model::InvoiceLineItem.new
+  line_item.description = bundle.description
+
+  line_item.group_line_detail! do |detail|
+    detail.id = bundle.id
+    detail.group_item_ref = Quickbooks::Model::BaseReference.new(bundle.name, value: bundle.id)
+    detail.quantity = 1
+
+    bundle.item_group_details.line_items.each do |l|
+      g_line_item = Quickbooks::Model::InvoiceLineItem.new
+      g_line_item.amount = 50
+
+      g_line_item.sales_item! do |gl|
+        gl.item_id    = l.id
+        gl.quantity   = 1
+        gl.unit_price = 50
+      end
+
+      detail.line_items << g_line_item
+    end
+  end
+
+  invoice.line_items << line_item
+```
+
 ## Emailing Invoices
 
 The Quickbooks API offers a **send invoice** feature that sends the specified invoice model via email.  By default the email is sent to the `bill_email` on the invoice.  This feature returns an invoice model with updated `email_status` and `delivery_info` as shown below:
@@ -425,6 +582,7 @@ service.delete(customer)
 ```
 
 ## Email Addresses
+
 Email attributes are not just strings, they are top-level objects, e.g. `EmailAddress` on a `Customer` for instance.
 
 A `Customer` has a setter method to make assigning an email address easier.
@@ -435,6 +593,7 @@ customer.email_address = "foo@example.com"
 ```
 
 ## Telephone Numbers
+
 Like Email Addresses, telephone numbers are not just basic strings but are top-level objects.
 
 ```ruby
@@ -489,7 +648,7 @@ end
 ```
 
 For complete details on Batch Operations see:
-https://developer.intuit.com/docs/0025_quickbooksapi/0050_data_services/020_key_concepts/00700_batch_operation
+https://developer.intuit.com/docs/api/accounting/batch
 
 ## Query Building / Filtering
 Intuit requires that complex queries be escaped in a certain way. To make it easier to build queries that will be accepted I have provided a *basic* Query builder.
@@ -572,7 +731,7 @@ service = Quickbooks::Service::ChangeDataCapture.new
 ...
 # define the list of entities to query
 entities = ["Invoice", "Bill", "Payment"] #etc
-changed = service.since(entities, Time.now.utc - 5 days)
+changed = service.since(entities, Time.now.utc - 5.days)
 ...
 # parse the XML to a list of Quickbooks::Models
 changed_as_hash = changed.all_types
@@ -580,7 +739,7 @@ changed_as_hash = changed.all_types
 
 Deleted entities can be found in the XML by checking their @status is "Deleted". In the return from the all_types method, deleted items will be of type Quickbooks::Model::ChangeModel.
 
-see: https://developer.intuit.com/docs/0100_accounting/0300_developer_guides/change_data_capture for more information.
+see: https://developer.intuit.com/docs/0100_quickbooks_online/0200_dev_guides/accounting/change_data_capture for more information.
 
 ## ChangeModel alternative Change Data Capture For Invoices, Customers, Vendors, Items, Payments and Credit Memos
 
@@ -590,30 +749,27 @@ It is possible to request changes up to 30 days ago.
 ```ruby
 service = Quickbooks::Service::InvoiceChange.new
 ...
-changed = service.since(Time.now.utc - 5 days)
+changed = service.since(Time.now.utc - 5.days)
 ```
 
 ```ruby
 customer_service = Quickbooks::Service::CustomerChange.new
 ...
-customer_changed = customer_service.since(Time.now.utc - 5 days)
+customer_changed = customer_service.since(Time.now.utc - 5.days)
 ```
 
 ```ruby
 vendor_service = Quickbooks::Service::VendorChange.new
 ...
-vendor_changed = vendor_service.since(Time.now.utc - 5 days)
+vendor_changed = vendor_service.since(Time.now.utc - 5.days)
 ```
 
 ```ruby
 item_service = Quickbooks::Service::ItemChange.new
 ...
-item_changed = item_service.since(Time.now.utc - 5 days)
+item_changed = item_service.since(Time.now.utc - 5.days)
 ```
-
-
-
-see: https://developer.intuit.com/docs/0100_accounting/0300_developer_guides/change_data_capture for more information.
+see: https://developer.intuit.com/docs/0100_quickbooks_online/0200_dev_guides/accounting/change_data_capture for more information.
 
 ## Reports API
 

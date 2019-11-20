@@ -1,12 +1,16 @@
 module Quickbooks
   module Model
     class Line < BaseModel
+      require 'quickbooks/model/group_line_detail'
+
       #== Constants
       SALES_ITEM_LINE_DETAIL = 'SalesItemLineDetail'
       SUB_TOTAL_LINE_DETAIL = 'SubTotalLineDetail'
       PAYMENT_LINE_DETAIL = 'PaymentLineDetail'
       DISCOUNT_LINE_DETAIL = 'DiscountLineDetail'
       JOURNAL_ENTRY_LINE_DETAIL = 'JournalEntryLineDetail'
+      TDS_LINE_DETAIL = 'TDSLineDetail'
+      GROUP_LINE_DETAIL = 'GroupLineDetail'
 
       xml_accessor :id, :from => 'Id'
       xml_accessor :line_num, :from => 'LineNum', :as => Integer
@@ -14,13 +18,16 @@ module Quickbooks
       xml_accessor :amount, :from => 'Amount', :as => BigDecimal, :to_xml => to_xml_big_decimal
       xml_accessor :detail_type, :from => 'DetailType'
       xml_accessor :linked_transactions, :from => 'LinkedTxn', :as => [LinkedTransaction]
+      xml_accessor :line_extras, :from => 'LineEx', :as => LineEx
 
       #== Various detail types
       xml_accessor :sales_item_line_detail, :from => 'SalesItemLineDetail', :as => SalesItemLineDetail
       xml_accessor :sub_total_line_detail, :from => 'SubTotalLineDetail', :as => SubTotalLineDetail
       xml_accessor :payment_line_detail, :from => 'PaymentLineDetail', :as => PaymentLineDetail
       xml_accessor :discount_line_detail, :from => 'DiscountLineDetail', :as => DiscountOverride
+      xml_accessor :tds_line_detail, :from => 'TDSLineDetail', :as => TdsLineDetail
       xml_accessor :journal_entry_line_detail, :from => 'JournalEntryLineDetail', :as => JournalEntryLineDetail
+      xml_accessor :group_line_detail, :from => 'GroupLineDetail', :as => GroupLineDetail
 
       def initialize(*args)
         self.linked_transactions ||= []
@@ -65,11 +72,25 @@ module Quickbooks
         yield self.discount_line_detail if block_given?
       end
 
+      def tds!
+        self.detail_type = TDS_LINE_DETAIL
+        self.tds_line_detail = TdsLineDetail.new
+
+        yield self.tds_line_detail if block_given?
+      end
+
       def journal_entry!
         self.detail_type = JOURNAL_ENTRY_LINE_DETAIL
         self.journal_entry_line_detail = JournalEntryLineDetail.new
 
         yield self.journal_entry_line_detail if block_given?
+      end
+
+      def group_line!
+        self.detail_type = GROUP_LINE_DETAIL
+        self.group_line_detail = GroupLineDetail.new
+
+        yield self.group_line_detail if block_given?
       end
 
       private

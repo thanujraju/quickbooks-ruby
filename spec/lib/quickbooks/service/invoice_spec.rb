@@ -7,7 +7,7 @@ describe "Quickbooks::Service::Invoice" do
     xml = fixture("invoices.xml")
     model = Quickbooks::Model::Invoice
 
-    stub_request(:get, @service.url_for_query, ["200", "OK"], xml)
+    stub_http_request(:get, @service.url_for_query, ["200", "OK"], xml)
     invoices = @service.query
     invoices.entries.count.should == 1
 
@@ -18,7 +18,7 @@ describe "Quickbooks::Service::Invoice" do
   it "can fetch an Invoice by ID" do
     xml = fixture("fetch_invoice_by_id.xml")
     model = Quickbooks::Model::Invoice
-    stub_request(:get, "#{@service.url_for_resource(model::REST_RESOURCE)}/1", ["200", "OK"], xml)
+    stub_http_request(:get, %r{#{@service.url_for_resource(model::REST_RESOURCE)}/1}, ["200", "OK"], xml)
     invoice = @service.fetch_by_id(1)
     invoice.doc_number.should == "1001"
   end
@@ -73,7 +73,7 @@ describe "Quickbooks::Service::Invoice" do
     xml = fixture("fetch_invoice_by_id.xml")
     model = Quickbooks::Model::Invoice
 
-    stub_request(:post, @service.url_for_resource(model::REST_RESOURCE), ["200", "OK"], xml)
+    stub_http_request(:post, @service.url_for_resource(model::REST_RESOURCE), ["200", "OK"], xml)
 
     invoice = Quickbooks::Model::Invoice.new
     invoice.customer_id = 2
@@ -114,7 +114,7 @@ describe "Quickbooks::Service::Invoice" do
     invoice.line_items << line_item
 
     xml = fixture("fetch_invoice_by_id.xml")
-    stub_request(:post, @service.url_for_resource(model::REST_RESOURCE), ["200", "OK"], xml)
+    stub_http_request(:post, @service.url_for_resource(model::REST_RESOURCE), ["200", "OK"], xml)
 
     update_response = @service.update(invoice, :sparse => true)
     update_response.doc_number.should == '1001'
@@ -128,7 +128,7 @@ describe "Quickbooks::Service::Invoice" do
     invoice.id = 1
 
     xml = fixture("invoice_delete_success_response.xml")
-    stub_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}?operation=delete", ["200", "OK"], xml)
+    stub_http_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}?operation=delete", ["200", "OK"], xml)
 
     response = @service.delete(invoice)
     response.should == true
@@ -141,7 +141,7 @@ describe "Quickbooks::Service::Invoice" do
     invoice.id = 1
 
     xml = fixture("invoice_void_success_response.xml")
-    stub_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}?operation=void", ["200", "OK"], xml)
+    stub_http_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}?operation=void", ["200", "OK"], xml)
 
     response = @service.void(invoice)
     response.private_note.should == 'Voided'
@@ -152,7 +152,7 @@ describe "Quickbooks::Service::Invoice" do
     invoice = Quickbooks::Model::Invoice.new
 
     xml = fixture("invoice_with_discount_line_item_response.xml")
-    stub_request(:post, @service.url_for_resource(model::REST_RESOURCE), ["200", "OK"], xml)
+    stub_http_request(:post, @service.url_for_resource(model::REST_RESOURCE), ["200", "OK"], xml)
 
     invoice.customer_id = 3
     invoice.txn_date = Date.civil(2014, 3, 12)
@@ -184,7 +184,7 @@ describe "Quickbooks::Service::Invoice" do
   it "can send an invoice using bill_email" do
     xml = fixture("invoice_send.xml")
     model = Quickbooks::Model::Invoice
-    stub_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}/1/send", ["200", "OK"], xml)
+    stub_http_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}/1/send", ["200", "OK"], xml)
 
     invoice = Quickbooks::Model::Invoice.new
     invoice.doc_number = "1001"
@@ -199,13 +199,13 @@ describe "Quickbooks::Service::Invoice" do
   it "can send an invoice with new email_address" do
     xml = fixture("invoice_send.xml")
     model = Quickbooks::Model::Invoice
-    stub_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}/1/send?sendTo=test@intuit.com", ["200", "OK"], xml)
+    stub_http_request(:post, "#{@service.url_for_resource(model::REST_RESOURCE)}/1/send?sendTo=test@intuit.com", ["200", "OK"], xml)
 
     invoice = Quickbooks::Model::Invoice.new
     invoice.doc_number = "1001"
     invoice.sync_token = 2
     invoice.id = 1
-    sent_invoice = @service.send(invoice,"test@intuit.com")
+    sent_invoice = @service.send(invoice, "test@intuit.com")
     sent_invoice.bill_email.address.should == "test@intuit.com"
   end
 
@@ -216,7 +216,7 @@ describe "Quickbooks::Service::Invoice" do
 
     xml = fixture("invoice_with_discount_line_item_response.xml")
     url = "#{@service.url_for_resource(model::REST_RESOURCE)}?requestid=#{requestid}"
-    stub_request(:post, url, ["200", "OK"], xml)
+    stub_http_request(:post, url, ["200", "OK"], xml)
 
     invoice.customer_id = 3
     invoice.txn_date = Date.civil(2014, 3, 12)
@@ -245,4 +245,68 @@ describe "Quickbooks::Service::Invoice" do
     created_invoice.id.should == "4"
   end
 
+  it "can read line items from a bundle" do
+    xml = fixture("invoice_with_bundle_line_item.xml")
+    stub_http_request(:get, %r{#{@service.url_for_resource(Quickbooks::Model::Invoice::REST_RESOURCE)}/186}, ["200", "OK"], xml)
+    invoice = @service.fetch_by_id(186)
+    invoice.valid?.should == true
+
+    invoice.doc_number.should == "1020"
+
+    invoice.line_items.size.should == 3
+    bundles = invoice.line_items.select { |line| line.group_line_detail? }
+    bundles.should_not == nil
+    bundle = bundles.first
+
+    bundle.description.should == 'chocolate covered cookies and other sweets'
+    bundle.amount.should == 0
+    bundle.group_line_detail.group_item_ref.name.should == 'Assorted sweets'
+    bundle.group_line_detail.group_item_ref.value.should == '24'
+    bundle.group_line_detail.quantity.to_i.should == 3
+
+    bundle.group_line_detail.line_items.size.should == 2
+
+    bundle_line = bundle.group_line_detail.line_items[0]
+    bundle_line.sales_item?.should == true
+    bundle_line.id.should == '2'
+    bundle_line.amount.should == 7.96
+    bundle_line.sales_line_item_detail.item_ref["name"].should == "Chocolate Covered Strawberries"
+    bundle_line.sales_line_item_detail.quantity.should == 15
+    bundle_line.sales_line_item_detail.unit_price.should == 0.5306667
+    bundle_line.sales_line_item_detail.tax_code_ref.value.should == '5'
+
+    bundle_line = bundle.group_line_detail.line_items[1]
+    bundle_line.sales_item?.should == true
+    bundle_line.id.should == '3'
+    bundle_line.amount.should == 2.65
+    bundle_line.sales_line_item_detail.item_ref["name"].should == "Snow Cookie"
+    bundle_line.sales_line_item_detail.quantity.should == 24
+    bundle_line.sales_line_item_detail.unit_price.should == 0.1104167
+    bundle_line.sales_line_item_detail.tax_code_ref.value.should == '5'
+
+    bundle_total = bundle.group_line_detail.line_items.inject(0) { |acc, l| acc + (l.sales_line_item_detail.quantity * l.sales_line_item_detail.unit_price) }
+    bundle_total.round(2).should == 10.61
+  end
+
+  it "can sparse update an Invoice containing a bundle" do
+    xml = fixture("invoice_with_bundle_line_item.xml")
+    stub_http_request(:get, %r{#{@service.url_for_resource(Quickbooks::Model::Invoice::REST_RESOURCE)}/186}, ["200", "OK"], xml)
+    invoice = @service.fetch_by_id(186)
+
+    invoice.line_items.each do |l|
+      if l.group_line_detail?
+        l.description << " - updated"
+        l.description.should == 'chocolate covered cookies and other sweets - updated'
+        l.group_line_detail.line_items.each do |group_line_item|
+          if group_line_item.sales_item?
+            group_line_item.description << " - updated"
+          end
+        end
+      end
+    end
+
+    stub_http_request(:post, @service.url_for_resource(Quickbooks::Model::Invoice::REST_RESOURCE), ["200", "OK"], xml)
+    update_response = @service.update(invoice, :sparse => true)
+    update_response.doc_number.should == '1020'
+  end
 end
